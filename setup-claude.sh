@@ -41,6 +41,37 @@ detect_os() {
     info "Detected OS: $OS"
 }
 
+# ── 0. Install unzip ─────────────────────────────────────────────
+install_unzip() {
+    header "unzip"
+    if command_exists unzip; then
+        success "unzip already installed ($(unzip -v 2>/dev/null | head -1 | awk '{print $2}'))"
+        return
+    fi
+
+    info "Installing unzip..."
+    if [[ "$OS" == "macos" ]]; then
+        if command_exists brew; then
+            brew install unzip
+        else
+            error "Homebrew not found. Install it first: https://brew.sh"
+            return 1
+        fi
+    else
+        if command_exists apt-get; then
+            sudo apt-get update && sudo apt-get install -y unzip
+        elif command_exists dnf; then
+            sudo dnf install -y unzip
+        elif command_exists pacman; then
+            sudo pacman -S --noconfirm unzip
+        else
+            error "No supported package manager found. Install unzip manually."
+            return 1
+        fi
+    fi
+    success "unzip installed"
+}
+
 # ── 1. Install Bun ──────────────────────────────────────────────
 install_bun() {
     header "Bun Runtime"
@@ -650,6 +681,7 @@ main() {
     fi
 
     detect_os
+    install_unzip
     install_bun
     install_claude
     configure_claude
