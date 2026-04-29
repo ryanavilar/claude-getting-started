@@ -31,6 +31,14 @@ prompt_yn() {
 
 command_exists() { command -v "$1" &>/dev/null; }
 
+check_in_path() {
+    local dir="$1"
+    if [[ ":$PATH:" != *":${dir}:"* ]]; then
+        warn "Binary installed but not in PATH. Add to your shell profile:"
+        warn "  export PATH=\"${dir}:\$PATH\""
+    fi
+}
+
 has_browser() {
     [[ "$OS" == "macos" ]] && return 0
     [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]] && return 0
@@ -79,49 +87,64 @@ install_unzip() {
     success "unzip installed"
 }
 
-# ── 1. Install Bun ──────────────────────────────────────────────
+# ── 1. Install Node.js ───────────────────────────────────────────
+install_node() {
+    header "Node.js"
+    if command_exists node; then
+        success "Node.js already installed ($(node --version 2>/dev/null))"
+        return
+    fi
+
+    info "Installing Node.js via nvm..."
+    if ! command_exists nvm && [[ ! -s "$HOME/.nvm/nvm.sh" ]]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+    fi
+
+    export NVM_DIR="$HOME/.nvm"
+    # shellcheck source=/dev/null
+    [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
+
+    nvm install --lts
+    nvm use --lts
+
+    success "Node.js installed ($(node --version)), npm $(npm --version)"
+    check_in_path "$NVM_DIR/versions/node/$(node --version)/bin"
+}
+
+# ── 2. Install Bun ──────────────────────────────────────────────
 install_bun() {
     header "Bun Runtime"
     if command_exists bun; then
-        local current_ver
-        current_ver="$(bun --version 2>/dev/null || echo 'unknown')"
-        success "Bun already installed (v${current_ver})"
-        if prompt_yn "Update Bun to latest?" "y"; then
-            bun upgrade
-            success "Bun updated to v$(bun --version)"
-        fi
-    else
-        info "Installing Bun..."
-        curl -fsSL https://bun.sh/install | bash
-        export BUN_INSTALL="$HOME/.bun"
-        export PATH="$BUN_INSTALL/bin:$PATH"
-        success "Bun installed (v$(bun --version))"
+        success "Bun already installed (v$(bun --version 2>/dev/null))"
+        return
     fi
+
+    info "Installing Bun..."
+    curl -fsSL https://bun.sh/install | bash
+    export BUN_INSTALL="$HOME/.bun"
+    export PATH="$BUN_INSTALL/bin:$PATH"
+    success "Bun installed (v$(bun --version))"
+    check_in_path "$HOME/.bun/bin"
 }
 
 # ── 2. Install / Update Claude Code ─────────────────────────────
 install_claude() {
     header "Claude Code CLI"
     if command_exists claude; then
-        local current_ver
-        current_ver="$(claude --version 2>/dev/null || echo 'unknown')"
-        success "Claude Code already installed (${current_ver})"
-        info "Updating Claude Code..."
-        npm install -g @anthropic-ai/claude-code@latest 2>/dev/null \
-            || bun install -g @anthropic-ai/claude-code@latest 2>/dev/null \
-            || warn "Could not auto-update — run: npm i -g @anthropic-ai/claude-code@latest"
-    else
-        info "Installing Claude Code via npm..."
-        if command_exists npm; then
-            npm install -g @anthropic-ai/claude-code@latest
-        elif command_exists bun; then
-            bun install -g @anthropic-ai/claude-code@latest
-        else
-            error "Neither npm nor bun found. Install Node.js or Bun first."
-            exit 1
-        fi
-        success "Claude Code installed"
+        success "Claude Code already installed ($(claude --version 2>/dev/null || echo 'unknown'))"
+        return
     fi
+
+    info "Installing Claude Code..."
+    if command_exists npm; then
+        npm install -g @anthropic-ai/claude-code@latest
+    elif command_exists bun; then
+        bun install -g @anthropic-ai/claude-code@latest
+    else
+        error "Neither npm nor bun found. Install Node.js or Bun first."
+        exit 1
+    fi
+    success "Claude Code installed"
 }
 
 # ── 3. Configure Claude defaults ────────────────────────────────
@@ -193,17 +216,13 @@ install_rtk() {
     local rtk_dir="$HOME/.local/share/rtk"
 
     if [[ -d "$rtk_dir" ]]; then
-        success "RTK already cloned at $rtk_dir"
-        if prompt_yn "Pull latest changes?" "y"; then
-            git -C "$rtk_dir" pull --ff-only
-            success "RTK updated"
-        fi
-    else
-        info "Cloning rtk-ai/rtk..."
-        mkdir -p "$(dirname "$rtk_dir")"
-        git clone https://github.com/rtk-ai/rtk.git "$rtk_dir"
-        success "RTK cloned to $rtk_dir"
+        success "RTK already installed at $rtk_dir"
+        return
     fi
+
+    info "Cloning rtk-ai/rtk..."
+    mkdir -p "$(dirname "$rtk_dir")"
+    git clone https://github.com/rtk-ai/rtk.git "$rtk_dir"
 
     info "Installing RTK dependencies..."
     cd "$rtk_dir"
@@ -215,7 +234,6 @@ install_rtk() {
         fi
     fi
 
-    # Check for install script or Makefile
     if [[ -f "install.sh" ]]; then
         info "Running RTK install script..."
         bash install.sh
@@ -225,7 +243,7 @@ install_rtk() {
     fi
 
     cd - >/dev/null
-    success "RTK setup complete"
+    success "RTK installed"
 }
 
 # ── 5. Install GitHub CLI ────────────────────────────────────────
@@ -394,6 +412,7 @@ install_glab_binary() {
         tar -xzf "${tmp_dir}/${filename}" -C "$tmp_dir"
         sudo install -m 755 "${tmp_dir}/bin/glab" /usr/local/bin/glab
         rm -rf "$tmp_dir"
+        check_in_path "/usr/local/bin"
     else
         rm -rf "$tmp_dir"
         error "Download failed. Install manually: https://gitlab.com/gitlab-org/cli/-/releases"
@@ -697,6 +716,7 @@ print_summary() {
     header "Setup Complete"
 
     echo -e "${BOLD}Installed:${NC}"
+    command_exists node   && echo -e "  ${GREEN}✓${NC} Node.js $(node --version 2>/dev/null)"
     command_exists bun    && echo -e "  ${GREEN}✓${NC} Bun $(bun --version 2>/dev/null)"
     command_exists claude && echo -e "  ${GREEN}✓${NC} Claude Code"
     [[ -d "$HOME/.local/share/rtk" ]] && echo -e "  ${GREEN}✓${NC} RTK (rtk-ai/rtk)"
@@ -728,14 +748,17 @@ print_summary() {
 main() {
     header "Claude Code Environment Setup"
     echo -e "This script will install and configure:"
-    echo -e "  1. ${BOLD}Bun${NC} — JavaScript runtime"
-    echo -e "  2. ${BOLD}Claude Code${NC} — Anthropic CLI (model: opus 4.6, effort: high)"
-    echo -e "  3. ${BOLD}RTK${NC} — rtk-ai/rtk toolkit"
-    echo -e "  4. ${BOLD}GitHub CLI${NC} — gh (auto-install + auth)"
-    echo -e "  5. ${BOLD}GitLab CLI${NC} — glab (optional, supports self-hosted)"
-    echo -e "  6. ${BOLD}tmux${NC} — terminal multiplexer"
-    echo -e "  7. ${BOLD}Telegram plugin${NC} — (optional) chat with Claude via Telegram"
-    echo -e "  8. ${BOLD}Auto-start${NC} — tmux + Claude on login"
+    echo -e "  1. ${BOLD}Node.js${NC} — via nvm (LTS)"
+    echo -e "  2. ${BOLD}Bun${NC} — JavaScript runtime"
+    echo -e "  3. ${BOLD}Claude Code${NC} — Anthropic CLI (model: opus 4.6, effort: high)"
+    echo -e "  4. ${BOLD}RTK${NC} — rtk-ai/rtk toolkit"
+    echo -e "  5. ${BOLD}GitHub CLI${NC} — gh (auto-install, optional auth)"
+    echo -e "  6. ${BOLD}GitLab CLI${NC} — glab (optional, supports self-hosted)"
+    echo -e "  7. ${BOLD}tmux${NC} — terminal multiplexer"
+    echo -e "  8. ${BOLD}Telegram plugin${NC} — (optional) chat with Claude via Telegram"
+    echo -e "  9. ${BOLD}Auto-start${NC} — tmux + Claude on login"
+    echo ""
+    echo -e "  ${CYAN}Skips anything already installed.${NC}"
     echo ""
 
     if ! prompt_yn "Continue with setup?" "y"; then
@@ -745,6 +768,7 @@ main() {
 
     detect_os
     install_unzip
+    install_node
     install_bun
     install_claude
     configure_claude
