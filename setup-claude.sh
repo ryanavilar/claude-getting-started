@@ -350,24 +350,13 @@ install_gitlab_cli() {
     fi
 
     info "Installing GitLab CLI..."
-    if [[ "$OS" == "macos" ]]; then
-        if command_exists brew; then
-            brew install glab
-        else
-            error "Homebrew not found. Install it first: https://brew.sh"
-            return 1
-        fi
+    if command_exists brew; then
+        brew install glab
+    elif [[ "$OS" == "linux" ]]; then
+        install_glab_binary
     else
-        if command_exists apt-get; then
-            curl -fsSL "https://gitlab.com/gitlab-org/cli/-/raw/main/scripts/install.sh" | sudo bash
-        elif command_exists dnf; then
-            sudo dnf install -y glab
-        elif command_exists pacman; then
-            sudo pacman -S --noconfirm glab
-        else
-            error "No supported package manager found. Install glab manually: https://gitlab.com/gitlab-org/cli"
-            return 1
-        fi
+        error "Homebrew not found. Install it first: https://brew.sh"
+        return 1
     fi
 
     success "GitLab CLI installed ($(glab --version | head -1 | awk '{print $3}'))"
@@ -376,6 +365,39 @@ install_gitlab_cli() {
         configure_gitlab_auth
     else
         info "Skipping auth — run 'glab auth login' later"
+    fi
+}
+
+install_glab_binary() {
+    local arch
+    case "$(uname -m)" in
+        x86_64)  arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *)       error "Unsupported architecture: $(uname -m)"; return 1 ;;
+    esac
+
+    info "Fetching latest glab release..."
+    local latest_tag
+    latest_tag="$(curl -fsSL "https://gitlab.com/api/v4/projects/34675721/releases" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['tag_name'])" 2>/dev/null)" \
+        || { error "Could not determine latest glab version"; return 1; }
+
+    local version="${latest_tag#v}"
+    local filename="glab_${version}_linux_${arch}.tar.gz"
+    local url="https://gitlab.com/gitlab-org/cli/-/releases/${latest_tag}/downloads/${filename}"
+
+    info "Downloading glab ${version} for linux/${arch}..."
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    if curl -fsSL "$url" -o "${tmp_dir}/${filename}"; then
+        tar -xzf "${tmp_dir}/${filename}" -C "$tmp_dir"
+        sudo install -m 755 "${tmp_dir}/bin/glab" /usr/local/bin/glab
+        rm -rf "$tmp_dir"
+    else
+        rm -rf "$tmp_dir"
+        error "Download failed. Install manually: https://gitlab.com/gitlab-org/cli/-/releases"
+        return 1
     fi
 }
 
