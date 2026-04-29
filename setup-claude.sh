@@ -234,8 +234,10 @@ install_github_cli() {
             gh_user="$(gh api user --jq '.login' 2>/dev/null || echo 'unknown')"
             success "Authenticated as: $gh_user"
         else
-            info "Not authenticated. Running gh auth login..."
-            gh auth login
+            warn "Not authenticated"
+            if prompt_yn "Authenticate GitHub CLI now?" "n"; then
+                gh auth login
+            fi
         fi
         return
     fi
@@ -250,7 +252,6 @@ install_github_cli() {
         fi
     else
         if command_exists apt-get; then
-            # Official GitHub apt repo
             (type -p wget >/dev/null || sudo apt-get install -y wget) \
                 && sudo mkdir -p -m 755 /etc/apt/keyrings \
                 && out=$(mktemp) \
@@ -272,8 +273,11 @@ install_github_cli() {
 
     success "GitHub CLI installed ($(gh --version | head -1 | awk '{print $3}'))"
 
-    info "Authenticating with GitHub..."
-    gh auth login
+    if prompt_yn "Authenticate GitHub CLI now?" "n"; then
+        gh auth login
+    else
+        info "Skipping auth — run 'gh auth login' later"
+    fi
 }
 
 # ── 6. Install GitLab CLI (optional) ────────────────────────────
@@ -289,7 +293,7 @@ install_gitlab_cli() {
             success "Already authenticated"
         else
             warn "Installed but not authenticated"
-            if prompt_yn "Authenticate GitLab CLI now?" "y"; then
+            if prompt_yn "Authenticate GitLab CLI now?" "n"; then
                 configure_gitlab_auth
             fi
         fi
@@ -311,7 +315,6 @@ install_gitlab_cli() {
         fi
     else
         if command_exists apt-get; then
-            # Official GitLab apt repo
             curl -fsSL "https://gitlab.com/gitlab-org/cli/-/raw/main/scripts/install.sh" | sudo bash
         elif command_exists dnf; then
             sudo dnf install -y glab
@@ -324,67 +327,51 @@ install_gitlab_cli() {
     fi
 
     success "GitLab CLI installed ($(glab --version | head -1 | awk '{print $3}'))"
-    configure_gitlab_auth
+
+    if prompt_yn "Authenticate GitLab CLI now?" "n"; then
+        configure_gitlab_auth
+    else
+        info "Skipping auth — run 'glab auth login' later"
+    fi
 }
 
 configure_gitlab_auth() {
     echo ""
-    echo -e "${BOLD}GitLab instance configuration:${NC}"
-    echo -e "  1) gitlab.com (default)"
-    echo -e "  2) Self-hosted GitLab instance"
+    read -rp "$(printf "${BOLD}Enter GitLab hostname [gitlab.com]: ${NC}")" gitlab_host
+    gitlab_host="${gitlab_host:-gitlab.com}"
+    gitlab_host="${gitlab_host%/}"
+
+    # Strip protocol if provided so --hostname gets just the host
+    gitlab_host="${gitlab_host#https://}"
+    gitlab_host="${gitlab_host#http://}"
+
+    info "Authenticating with $gitlab_host..."
+    echo ""
+    echo -e "${BOLD}Authentication method:${NC}"
+    echo -e "  1) Browser / OAuth (if supported)"
+    echo -e "  2) Personal Access Token"
     echo ""
 
-    local choice
-    read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" choice
-    choice="${choice:-1}"
+    local auth_method
+    read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" auth_method
+    auth_method="${auth_method:-2}"
 
-    case "$choice" in
-        2)
-            local gitlab_host
-            read -rp "$(printf "${BOLD}Enter your GitLab URL (e.g. https://gitlab.example.com): ${NC}")" gitlab_host
+    if [[ "$auth_method" == "1" ]]; then
+        glab auth login --hostname "$gitlab_host"
+    else
+        local token
+        read -rsp "$(printf "${BOLD}Enter your Personal Access Token: ${NC}")" token
+        echo ""
 
-            if [[ -z "$gitlab_host" ]]; then
-                warn "No URL provided — defaulting to gitlab.com"
-                glab auth login
-                return
-            fi
+        if [[ -z "$token" ]]; then
+            warn "No token provided — skipping authentication"
+            return
+        fi
 
-            # Strip trailing slash
-            gitlab_host="${gitlab_host%/}"
+        echo "$token" | glab auth login --hostname "$gitlab_host" --stdin
+    fi
 
-            info "Authenticating with $gitlab_host..."
-            echo ""
-            echo -e "${BOLD}Authentication method:${NC}"
-            echo -e "  1) Browser / OAuth (if supported)"
-            echo -e "  2) Personal Access Token"
-            echo ""
-
-            local auth_method
-            read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" auth_method
-            auth_method="${auth_method:-2}"
-
-            if [[ "$auth_method" == "1" ]]; then
-                glab auth login --hostname "$gitlab_host"
-            else
-                local token
-                read -rsp "$(printf "${BOLD}Enter your Personal Access Token: ${NC}")" token
-                echo ""
-
-                if [[ -z "$token" ]]; then
-                    warn "No token provided — skipping authentication"
-                    return
-                fi
-
-                echo "$token" | glab auth login --hostname "$gitlab_host" --stdin
-            fi
-
-            success "Authenticated with $gitlab_host"
-            ;;
-        *)
-            info "Authenticating with gitlab.com..."
-            glab auth login
-            ;;
-    esac
+    success "Authenticated with $gitlab_host"
 }
 
 # ── 7. Install tmux ──────────────────────────────────────────────
