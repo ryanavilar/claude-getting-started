@@ -16,7 +16,7 @@ CLAUDE.md          # This file — context for Claude Code sessions
 
 - **Single file**: Everything lives in `setup-claude.sh`. No Makefile, no installer framework. Keep it that way.
 - **Idempotent**: Running the script twice should detect existing installs and offer updates, not break things.
-- **Interactive**: Every destructive or opinionated action prompts the user. Telegram setup is opt-in (default no).
+- **Interactive**: Every destructive or opinionated action prompts the user. GitLab and Telegram are opt-in (default no). GitHub auto-installs but skips if present.
 - **Merge, don't overwrite**: Claude settings at `~/.claude/settings.json` are merged via python3 JSON manipulation, not clobbered.
 - **Restart loop in tmux**: Claude runs in a `while true` loop inside the tmux session so it auto-restarts on exit/crash.
 
@@ -33,14 +33,16 @@ CLAUDE.md          # This file — context for Claude Code sessions
 2. Claude Code CLI (`@anthropic-ai/claude-code`)
 3. Claude settings: `model: claude-opus-4-6`, `effort: high`
 4. RTK from `rtk-ai/rtk` → `~/.local/share/rtk`
-5. tmux
-6. (Optional) Telegram MCP plugin
-7. Auto-start service (launchd on macOS, systemd on Linux)
-8. Startup script at `~/.local/bin/start-claude-tmux.sh`
+5. GitHub CLI (`gh`) — auto-install, skips if already present and authenticated
+6. (Optional) GitLab CLI (`glab`) — supports gitlab.com and self-hosted instances with token or OAuth auth
+7. tmux
+8. (Optional) Telegram MCP plugin
+9. Auto-start service (launchd on macOS, systemd on Linux)
+10. Startup script at `~/.local/bin/start-claude-tmux.sh`
 
 ## When Modifying
 
 - Test on both macOS and Linux (or at least check both code paths).
-- Keep the script under 600 lines. If it grows past that, split into sourced modules.
+- Keep the script under 800 lines. If it grows past that, split into sourced modules.
 - Don't add dependencies beyond what the script itself installs (curl, git, python3 are assumed present).
 - Preserve idempotency — every install step should check-before-act.

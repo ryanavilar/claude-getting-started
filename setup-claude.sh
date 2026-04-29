@@ -190,7 +190,173 @@ install_rtk() {
     success "RTK setup complete"
 }
 
-# ── 5. Install tmux ─────────────────────────────────────────────
+# ── 5. Install GitHub CLI ────────────────────────────────────────
+install_github_cli() {
+    header "GitHub CLI (gh)"
+    if command_exists gh; then
+        local current_ver
+        current_ver="$(gh --version 2>/dev/null | head -1 | awk '{print $3}')"
+        success "GitHub CLI already installed (v${current_ver})"
+
+        if gh auth status &>/dev/null; then
+            local gh_user
+            gh_user="$(gh api user --jq '.login' 2>/dev/null || echo 'unknown')"
+            success "Authenticated as: $gh_user"
+        else
+            info "Not authenticated. Running gh auth login..."
+            gh auth login
+        fi
+        return
+    fi
+
+    info "Installing GitHub CLI..."
+    if [[ "$OS" == "macos" ]]; then
+        if command_exists brew; then
+            brew install gh
+        else
+            error "Homebrew not found. Install it first: https://brew.sh"
+            return 1
+        fi
+    else
+        if command_exists apt-get; then
+            # Official GitHub apt repo
+            (type -p wget >/dev/null || sudo apt-get install -y wget) \
+                && sudo mkdir -p -m 755 /etc/apt/keyrings \
+                && out=$(mktemp) \
+                && wget -nv -O"$out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+                && cat "$out" | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+                && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+                && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+                && sudo apt-get update \
+                && sudo apt-get install -y gh
+        elif command_exists dnf; then
+            sudo dnf install -y gh
+        elif command_exists pacman; then
+            sudo pacman -S --noconfirm github-cli
+        else
+            error "No supported package manager found. Install gh manually: https://cli.github.com"
+            return 1
+        fi
+    fi
+
+    success "GitHub CLI installed ($(gh --version | head -1 | awk '{print $3}'))"
+
+    info "Authenticating with GitHub..."
+    gh auth login
+}
+
+# ── 6. Install GitLab CLI (optional) ────────────────────────────
+install_gitlab_cli() {
+    header "GitLab CLI (glab)"
+
+    if command_exists glab; then
+        local current_ver
+        current_ver="$(glab --version 2>/dev/null | head -1 | awk '{print $3}')"
+        success "GitLab CLI already installed (v${current_ver})"
+
+        if glab auth status &>/dev/null; then
+            success "Already authenticated"
+        else
+            warn "Installed but not authenticated"
+            if prompt_yn "Authenticate GitLab CLI now?" "y"; then
+                configure_gitlab_auth
+            fi
+        fi
+        return
+    fi
+
+    if ! prompt_yn "Set up GitLab CLI (glab)?" "n"; then
+        info "Skipping GitLab setup"
+        return
+    fi
+
+    info "Installing GitLab CLI..."
+    if [[ "$OS" == "macos" ]]; then
+        if command_exists brew; then
+            brew install glab
+        else
+            error "Homebrew not found. Install it first: https://brew.sh"
+            return 1
+        fi
+    else
+        if command_exists apt-get; then
+            # Official GitLab apt repo
+            curl -fsSL "https://gitlab.com/gitlab-org/cli/-/raw/main/scripts/install.sh" | sudo bash
+        elif command_exists dnf; then
+            sudo dnf install -y glab
+        elif command_exists pacman; then
+            sudo pacman -S --noconfirm glab
+        else
+            error "No supported package manager found. Install glab manually: https://gitlab.com/gitlab-org/cli"
+            return 1
+        fi
+    fi
+
+    success "GitLab CLI installed ($(glab --version | head -1 | awk '{print $3}'))"
+    configure_gitlab_auth
+}
+
+configure_gitlab_auth() {
+    echo ""
+    echo -e "${BOLD}GitLab instance configuration:${NC}"
+    echo -e "  1) gitlab.com (default)"
+    echo -e "  2) Self-hosted GitLab instance"
+    echo ""
+
+    local choice
+    read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" choice
+    choice="${choice:-1}"
+
+    case "$choice" in
+        2)
+            local gitlab_host
+            read -rp "$(printf "${BOLD}Enter your GitLab URL (e.g. https://gitlab.example.com): ${NC}")" gitlab_host
+
+            if [[ -z "$gitlab_host" ]]; then
+                warn "No URL provided — defaulting to gitlab.com"
+                glab auth login
+                return
+            fi
+
+            # Strip trailing slash
+            gitlab_host="${gitlab_host%/}"
+
+            info "Authenticating with $gitlab_host..."
+            echo ""
+            echo -e "${BOLD}Authentication method:${NC}"
+            echo -e "  1) Browser / OAuth (if supported)"
+            echo -e "  2) Personal Access Token"
+            echo ""
+
+            local auth_method
+            read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" auth_method
+            auth_method="${auth_method:-2}"
+
+            if [[ "$auth_method" == "1" ]]; then
+                glab auth login --hostname "$gitlab_host"
+            else
+                local token
+                read -rsp "$(printf "${BOLD}Enter your Personal Access Token: ${NC}")" token
+                echo ""
+
+                if [[ -z "$token" ]]; then
+                    warn "No token provided — skipping authentication"
+                    return
+                fi
+
+                echo "$token" | glab auth login --hostname "$gitlab_host" --stdin
+            fi
+
+            success "Authenticated with $gitlab_host"
+            ;;
+        *)
+            info "Authenticating with gitlab.com..."
+            glab auth login
+            ;;
+    esac
+}
+
+# ── 7. Install tmux ──────────────────────────────────────────────
 install_tmux() {
     header "tmux"
     if command_exists tmux; then
@@ -439,8 +605,10 @@ print_summary() {
     echo -e "${BOLD}Installed:${NC}"
     command_exists bun    && echo -e "  ${GREEN}✓${NC} Bun $(bun --version 2>/dev/null)"
     command_exists claude && echo -e "  ${GREEN}✓${NC} Claude Code"
-    command_exists tmux   && echo -e "  ${GREEN}✓${NC} tmux $(tmux -V 2>/dev/null | awk '{print $2}')"
     [[ -d "$HOME/.local/share/rtk" ]] && echo -e "  ${GREEN}✓${NC} RTK (rtk-ai/rtk)"
+    command_exists gh     && echo -e "  ${GREEN}✓${NC} GitHub CLI ($(gh --version 2>/dev/null | head -1 | awk '{print $3}'))"
+    command_exists glab   && echo -e "  ${GREEN}✓${NC} GitLab CLI ($(glab --version 2>/dev/null | head -1 | awk '{print $3}'))"
+    command_exists tmux   && echo -e "  ${GREEN}✓${NC} tmux $(tmux -V 2>/dev/null | awk '{print $2}')"
     [[ "$SETUP_TELEGRAM" == true ]]   && echo -e "  ${GREEN}✓${NC} Telegram plugin"
 
     echo ""
@@ -469,9 +637,11 @@ main() {
     echo -e "  1. ${BOLD}Bun${NC} — JavaScript runtime"
     echo -e "  2. ${BOLD}Claude Code${NC} — Anthropic CLI (model: opus 4.6, effort: high)"
     echo -e "  3. ${BOLD}RTK${NC} — rtk-ai/rtk toolkit"
-    echo -e "  4. ${BOLD}tmux${NC} — terminal multiplexer"
-    echo -e "  5. ${BOLD}Telegram plugin${NC} — (optional) chat with Claude via Telegram"
-    echo -e "  6. ${BOLD}Auto-start${NC} — tmux + Claude on login"
+    echo -e "  4. ${BOLD}GitHub CLI${NC} — gh (auto-install + auth)"
+    echo -e "  5. ${BOLD}GitLab CLI${NC} — glab (optional, supports self-hosted)"
+    echo -e "  6. ${BOLD}tmux${NC} — terminal multiplexer"
+    echo -e "  7. ${BOLD}Telegram plugin${NC} — (optional) chat with Claude via Telegram"
+    echo -e "  8. ${BOLD}Auto-start${NC} — tmux + Claude on login"
     echo ""
 
     if ! prompt_yn "Continue with setup?" "y"; then
@@ -484,6 +654,8 @@ main() {
     install_claude
     configure_claude
     install_rtk
+    install_github_cli
+    install_gitlab_cli
     install_tmux
     setup_telegram
     setup_tmux_autostart
