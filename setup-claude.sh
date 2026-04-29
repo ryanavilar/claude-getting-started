@@ -31,6 +31,13 @@ prompt_yn() {
 
 command_exists() { command -v "$1" &>/dev/null; }
 
+has_browser() {
+    [[ "$OS" == "macos" ]] && return 0
+    [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]] && return 0
+    command_exists xdg-open && return 0
+    return 1
+}
+
 # ── Detect OS ────────────────────────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
@@ -236,7 +243,7 @@ install_github_cli() {
         else
             warn "Not authenticated"
             if prompt_yn "Authenticate GitHub CLI now?" "n"; then
-                gh auth login
+                github_auth
             fi
         fi
         return
@@ -274,10 +281,47 @@ install_github_cli() {
     success "GitHub CLI installed ($(gh --version | head -1 | awk '{print $3}'))"
 
     if prompt_yn "Authenticate GitHub CLI now?" "n"; then
-        gh auth login
+        github_auth
     else
         info "Skipping auth — run 'gh auth login' later"
     fi
+}
+
+github_auth() {
+    if has_browser; then
+        echo ""
+        echo -e "${BOLD}Authentication method:${NC}"
+        echo -e "  1) Browser login (opens github.com)"
+        echo -e "  2) Personal Access Token"
+        echo ""
+
+        local auth_method
+        read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" auth_method
+        auth_method="${auth_method:-1}"
+
+        if [[ "$auth_method" == "2" ]]; then
+            github_token_auth
+        else
+            gh auth login --web
+        fi
+    else
+        info "No browser detected (headless server) — using token auth"
+        github_token_auth
+    fi
+}
+
+github_token_auth() {
+    local token
+    read -rsp "$(printf "${BOLD}Enter your GitHub Personal Access Token: ${NC}")" token
+    echo ""
+
+    if [[ -z "$token" ]]; then
+        warn "No token provided — skipping authentication"
+        return
+    fi
+
+    echo "$token" | gh auth login --with-token
+    success "Authenticated with GitHub"
 }
 
 # ── 6. Install GitLab CLI (optional) ────────────────────────────
@@ -346,32 +390,42 @@ configure_gitlab_auth() {
     gitlab_host="${gitlab_host#http://}"
 
     info "Authenticating with $gitlab_host..."
-    echo ""
-    echo -e "${BOLD}Authentication method:${NC}"
-    echo -e "  1) Browser / OAuth (if supported)"
-    echo -e "  2) Personal Access Token"
-    echo ""
 
-    local auth_method
-    read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" auth_method
-    auth_method="${auth_method:-2}"
-
-    if [[ "$auth_method" == "1" ]]; then
-        glab auth login --hostname "$gitlab_host"
-    else
-        local token
-        read -rsp "$(printf "${BOLD}Enter your Personal Access Token: ${NC}")" token
+    if has_browser; then
+        echo ""
+        echo -e "${BOLD}Authentication method:${NC}"
+        echo -e "  1) Browser / OAuth (opens $gitlab_host)"
+        echo -e "  2) Personal Access Token"
         echo ""
 
-        if [[ -z "$token" ]]; then
-            warn "No token provided — skipping authentication"
-            return
-        fi
+        local auth_method
+        read -rp "$(printf "${BOLD}Choose [1/2]: ${NC}")" auth_method
+        auth_method="${auth_method:-1}"
 
-        echo "$token" | glab auth login --hostname "$gitlab_host" --stdin
+        if [[ "$auth_method" == "2" ]]; then
+            gitlab_token_auth "$gitlab_host"
+        else
+            glab auth login --hostname "$gitlab_host"
+        fi
+    else
+        info "No browser detected (headless server) — using token auth"
+        gitlab_token_auth "$gitlab_host"
+    fi
+}
+
+gitlab_token_auth() {
+    local hostname="$1"
+    local token
+    read -rsp "$(printf "${BOLD}Enter your Personal Access Token: ${NC}")" token
+    echo ""
+
+    if [[ -z "$token" ]]; then
+        warn "No token provided — skipping authentication"
+        return
     fi
 
-    success "Authenticated with $gitlab_host"
+    echo "$token" | glab auth login --hostname "$hostname" --stdin
+    success "Authenticated with $hostname"
 }
 
 # ── 7. Install tmux ──────────────────────────────────────────────
